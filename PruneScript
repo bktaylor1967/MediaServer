@@ -1,0 +1,59 @@
+import requests
+import os
+import sys
+
+# Configuration via Environment Variables
+SONARR_URL = os.getenv("SONARR_URL", "http://127.0.0.1:8989")
+API_KEY = os.getenv("SONARR_API_KEY")
+DRY_RUN = os.getenv("DRY_RUN", "True").lower() == "true"
+
+HEADERS = {"X-Api-Key": API_KEY}
+
+def prune_old_seasons():
+    if not API_KEY:
+        print("Error: SONARR_API_KEY environment variable is not set.")
+        sys.exit(1)
+
+    try:
+        series_resp = requests.get(f"{SONARR_URL}/api/v3/series", headers=HEADERS)
+        series_list = series_resp.json()
+        
+        tags_resp = requests.get(f"{SONARR_URL}/api/v3/tag", headers=HEADERS).json()
+        no_prune_id = next((t['id'] for t in tags_resp if t['label'] == 'no-prune'), None)
+        delete_me_id = next((t['id'] for t in tags_resp if t['label'] == 'delete-me'), None)
+
+        for series in series_list:
+            series_id = series['id']
+            series_details = requests.get(f"{SONARR_URL}/api/v3/series/{series_id}", headers=HEADERS).json()
+            series_tags = series_details.get('tags', [])
+
+            if no_prune_id and no_prune_id in series_tags:
+                print(f"Skipping {series['title']} (no-prune tag found)")
+                continue
+
+            if delete_me_id and delete_me_id in series_tags:
+                if DRY_RUN:
+                    print(f"[DRY RUN] Would delete entire series: {series['title']}")
+                else:
+                    requests.delete(f"{SONARR_URL}/api/v3/series/{series_id}?deleteFiles=true", headers=HEADERS)
+                continue
+            
+            files_resp = requests.get(f"{SONARR_URL}/api/v3/episodefile?seriesId={series_id}", headers=HEADERS)
+            files = files_resp.json()
+            
+            seasons = sorted(list(set([f['seasonNumber'] for f in files if f['seasonNumber'] > 0])))
+            
+            if len(seasons) > 1:
+                for season in seasons[:-1]:
+                    to_delete = [f for f in files if f['seasonNumber'] == season]
+                    for f in to_delete:
+                        if DRY_RUN:
+                            print(f"[DRY RUN] Would delete Season {season} file: {f['relativePath']}")
+                        else:
+                            requests.delete(f"{SONARR_URL}/api/v3/episodefile/{f['id']}", headers=HEADERS)
+                            
+    except Exception as e:
+        print(f"Error: {e}")
+
+if __name__ == "__main__":
+    prune_old_seasons()
