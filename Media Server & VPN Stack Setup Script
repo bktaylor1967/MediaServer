@@ -1,0 +1,89 @@
+#!/bin/bash
+
+# ==============================================================================
+# Media Server & VPN Stack Setup Script
+# ==============================================================================
+
+echo "========================================"
+echo "   Media Server VPN Setup & Launcher    "
+echo "========================================"
+echo ""
+
+# 1. Collect VPN Information from the user
+echo "Please enter your VPN details below."
+read -p "VPN Service Provider (e.g., mullvad, nordvpn): " vpn_provider
+read -p "VPN Username: " vpn_user
+read -s -p "VPN Password: " vpn_pass
+echo -e "\n"
+
+# 2. Generate the .env file for secure variable passing
+echo "Generating .env file..."
+cat <<EOF > .env
+VPN_SERVICE_PROVIDER=$vpn_provider
+OPENVPN_USER=$vpn_user
+OPENVPN_PASSWORD=$vpn_pass
+EOF
+
+# 3. Generate the docker-compose.yml file
+# This recreates the stack originally defined in MediaServer.txt
+echo "Generating docker-compose.yml..."
+cat <<'EOF' > docker-compose.yml
+version: '3.8'
+
+services:
+  gluetun:
+    image: qmcgaw/gluetun
+    container_name: gluetun
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      - 8085:8085  # SABnzbd
+      - 8989:8989  # Sonarr
+      - 7878:7878  # Radarr
+      - 9696:9696  # Prowlarr
+      - 8787:8787  # Readarr
+      - 8686:8686  # Lidarr
+      - 8080:8080  # qBittorrent
+      - 5055:5055  # Jellyseerr
+    environment:
+      - VPN_SERVICE_PROVIDER=${VPN_SERVICE_PROVIDER}
+      - OPENVPN_USER=${OPENVPN_USER}
+      - OPENVPN_PASSWORD=${OPENVPN_PASSWORD}
+
+  sabnzbd:
+    image: lscr.io/linuxserver/sabnzbd:latest
+    container_name: sabnzbd
+    network_mode: "service:gluetun"
+    environment:
+      - PUID=1000
+      - PGID=1000
+    volumes:
+      - ./config/sabnzbd:/config
+      - /data:/data
+    restart: unless-stopped
+
+  # Add your other services (Sonarr, Radarr, Jellyseerr, etc.) below
+  # ensuring network_mode is set to service:gluetun for those requiring VPN
+EOF
+
+# 4. Confirm and Deploy
+echo "Configuration files successfully generated."
+read -p "Do you want to start the media server stack now? (y/n) " deploy_confirm
+
+if [[ "$deploy_confirm" =~ ^[Yy]$ ]]; then
+    echo "Deploying the stack via Docker Compose..."
+    # Fallback to 'docker compose' if 'docker-compose' is not installed
+    if command -v docker-compose &> /dev/null; then
+        docker-compose up -d
+    else
+        docker compose up -d
+    fi
+    echo ""
+    echo "========================================"
+    echo " Setup Complete! Services are starting. "
+    echo "========================================"
+else
+    echo "Deployment skipped. You can start the stack later by running 'docker-compose up -d'."
+fi
