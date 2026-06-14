@@ -1,0 +1,77 @@
+import requests
+import os
+
+# Configuration: Environment Variables
+SONARR_URL = os.getenv("SONARR_URL", "http://192.168.80.5:8989")
+SONARR_API_KEY = os.getenv("SONARR_API_KEY")
+
+RADARR_URL = os.getenv("RADARR_URL", "http://192.168.80.5:7878")
+RADARR_API_KEY = os.getenv("RADARR_API_KEY")
+
+LIDARR_URL = os.getenv("LIDARR_URL", "http://192.168.80.5:8686")
+LIDARR_API_KEY = os.getenv("LIDARR_API_KEY")
+
+# Individual Dry Run Toggles
+DRY_RUN_SONARR = os.getenv("DRY_RUN_SONARR", "True").lower() == "true"
+DRY_RUN_RADARR = os.getenv("DRY_RUN_RADARR", "True").lower() == "true"
+DRY_RUN_LIDARR = os.getenv("DRY_RUN_LIDARR", "True").lower() == "true"
+
+def run_maintenance():
+    # --- SONARR ---
+    if SONARR_API_KEY:
+        print("--- Running Sonarr Maintenance ---")
+        headers = {"X-Api-Key": SONARR_API_KEY}
+        try:
+            series_list = requests.get(f"{SONARR_URL}/api/v3/series", headers=headers).json()
+            tags = requests.get(f"{SONARR_URL}/api/v3/tag", headers=headers).json()
+            no_prune = next((t['id'] for t in tags if t['label'] == 'no-prune'), None)
+            del_me = next((t['id'] for t in tags if t['label'] == 'delete-me'), None)
+
+            for s in series_list:
+                tags_on_series = s.get('tags', [])
+                if no_prune and no_prune in tags_on_series: continue
+                if del_me and del_me in tags_on_series:
+                    print(f"{'[DRY RUN] ' if DRY_RUN_SONARR else ''}Deleting Series: {s['title']}")
+                    if not DRY_RUN_SONARR: requests.delete(f"{SONARR_URL}/api/v3/series/{s['id']}?deleteFiles=true", headers=headers)
+                    continue
+                
+                # Season Pruning
+                files = requests.get(f"{SONARR_URL}/api/v3/episodefile?seriesId={s['id']}", headers=headers).json()
+                seasons = sorted(list(set([f['seasonNumber'] for f in files if f['seasonNumber'] > 0])))
+                if len(seasons) > 1:
+                    for season in seasons[:-1]:
+                        for f in [f for f in files if f['seasonNumber'] == season]:
+                            print(f"{'[DRY RUN] ' if DRY_RUN_SONARR else ''}Deleting Season {season} file: {f['relativePath']}")
+                            if not DRY_RUN_SONARR: requests.delete(f"{SONARR_URL}/api/v3/episodefile/{f['id']}", headers=headers)
+        except Exception as e: print(f"Sonarr Error: {e}")
+
+    # --- RADARR ---
+    if RADARR_API_KEY:
+        print("--- Running Radarr Maintenance ---")
+        headers = {"X-Api-Key": RADARR_API_KEY}
+        try:
+            movies = requests.get(f"{RADARR_URL}/api/v3/movie", headers=headers).json()
+            tags = requests.get(f"{RADARR_URL}/api/v3/tag", headers=headers).json()
+            del_me = next((t['id'] for t in tags if t['label'] == 'delete-me'), None)
+            for m in movies:
+                if del_me and del_me in m.get('tags', []):
+                    print(f"{'[DRY RUN] ' if DRY_RUN_RADARR else ''}Deleting Movie: {m['title']}")
+                    if not DRY_RUN_RADARR: requests.delete(f"{RADARR_URL}/api/v3/movie/{m['id']}?deleteFiles=true", headers=headers)
+        except Exception as e: print(f"Radarr Error: {e}")
+
+    # --- LIDARR ---
+    if LIDARR_API_KEY:
+        print("--- Running Lidarr Maintenance ---")
+        headers = {"X-Api-Key": LIDARR_API_KEY}
+        try:
+            artists = requests.get(f"{LIDARR_URL}/api/v1/artist", headers=headers).json()
+            tags = requests.get(f"{LIDARR_URL}/api/v1/tag", headers=headers).json()
+            del_me = next((t['id'] for t in tags if t['label'] == 'delete-me'), None)
+            for a in artists:
+                if del_me and del_me in a.get('tags', []):
+                    print(f"{'[DRY RUN] ' if DRY_RUN_LIDARR else ''}Deleting Artist: {a['artistName']}")
+                    if not DRY_RUN_LIDARR: requests.delete(f"{LIDARR_URL}/api/v1/artist/{a['id']}?deleteFiles=true", headers=headers)
+        except Exception as e: print(f"Lidarr Error: {e}")
+
+if __name__ == "__main__":
+    run_maintenance()
